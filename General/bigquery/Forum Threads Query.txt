@@ -1,0 +1,93 @@
+with
+course AS (
+  SELECT     time,
+    date(time) as day,
+    username, 
+    course_id,
+    context.user_id as user_id,
+    event_type, 
+    context.path,
+    JSON_EXTRACT_SCALAR(event, '$.thread_type') AS thread_type,
+    JSON_EXTRACT_SCALAR(event, '$.commentable_id') AS commentable_id,
+    JSON_EXTRACT_SCALAR(event, '$.user_forums_roles[0]') AS user_forums_roles,
+    JSON_EXTRACT_SCALAR(event, '$.user_course_roles[0]') AS user_course_roles,
+    JSON_EXTRACT_SCALAR(event, '$.user_forums_roles[1]') AS user_forums_roles2,
+    JSON_EXTRACT_SCALAR(event, '$.user_course_roles[1]') AS user_course_roles2,
+    JSON_EXTRACT_SCALAR(event, '$.category_id') AS category_id,
+    JSON_EXTRACT_SCALAR(event, '$.id') AS id,
+    JSON_EXTRACT_SCALAR(event, '$.category_name') AS category_name,
+    JSON_EXTRACT_SCALAR(event, '$.discussion.id') AS discussion_id,
+    JSON_EXTRACT_SCALAR(event, '$.title') AS title,
+    JSON_EXTRACT_SCALAR(event, '$.response.id') AS response_id_raw,
+    JSON_EXTRACT_SCALAR(event, '$.body') AS body
+  from `mitx-data-sets.MITx__CTL_SC1x__2T2018_logs.*`),
+A AS  (
+  SELECT
+    *,
+    "" AS response_id,
+    id AS thread_id,
+    "" AS comment_id
+  FROM
+    course
+  WHERE
+    event_type LIKE "edx.forum.thread.created") ,
+    
+ B AS (
+  SELECT
+    *,
+    id AS response_id,
+    discussion_id AS thread_id,
+    "" AS comment_id
+  FROM
+    course
+  WHERE
+    event_type LIKE "edx.forum.response.created"
+    ),
+    
+ C AS (
+  SELECT
+    *,
+    response_id_raw AS response_id,
+    discussion_id AS thread_id,
+    id AS comment_id
+  FROM
+    course
+  WHERE
+    event_type LIKE "edx.forum.comment.created"
+  ),
+  
+D AS 
+(SELECT REPLACE(REPLACE(event_type, "/courses/course-v1:MITx+CTL.SC2x+1T2018/discussion/comments/", ""),"/endorse", "") AS id, "Answer" AS Answer
+FROM course
+where event_type LIKE "%endorse"),
+
+E AS ((select * from A) UNION ALL (select * from B) UNION ALL (select * from C)),
+
+F AS (
+Select 
+  extract(ISOWeek from time) as Week,
+  E.*,
+  Concat(E.thread_id,"-",E.response_id,"-",E.comment_id) AS code,
+  D.Answer,
+  SPLIT(category_name, '/')[OFFSET(0)] as chapter_name,
+  SPLIT(category_name, '/')[OFFSET(1)] as section_name,
+  (user_forums_roles='Community TA' OR user_forums_roles2='Community TA') as CTA
+FROM E 
+Left join D on E.id=D.id
+Order BY code),
+
+G AS (select distinct thread_id, title,thread_type,time from F where event_type LIKE "edx.forum.thread.created"),
+
+H AS (select distinct thread_id, section_name from F where event_type="edx.forum.response.created")
+
+select F.*,  
+    case when H.section_name IS Null then F.section_name else H.section_name end as section_name2,
+    G.title AS title2,
+    G.thread_type AS thread_type2,
+    G.time AS thread_post_time
+From F
+left join G 
+on F.thread_id=G.thread_id
+left join H
+on F.thread_id=H.thread_id
+order by code
